@@ -1,51 +1,23 @@
-import asyncio
-import httpx
-import os
-from tqdm.asyncio import tqdm
-from certara_secret import oauth2_token, cert_verify
+### ROLE
+You are an IRS Tax Systems Architect and Taxonomy Specialist. Your goal is to organize a diverse set of call-topic sub-categories into a logical, two-level hierarchy for a federal tax administration call center.
 
-# SSL Config
-os.environ["SSL_CERT_FILE"] = cert_verify
-os.environ["REQUEST_CA_BUNDLE"] = cert_verify
+### OBJECTIVE
+Take the provided list of ~320 "Level 2" call topics and group them into 12-20 high-level "Level 1" categories. These Level 1 categories should represent distinct IRS business units, administrative workflows, or broad taxpayer needs.
 
-async def process_batch(client, semaphore, batch, url, token):
-    """Sends a single batch request with concurrency control."""
-    async with semaphore:
-        payload = {
-            "inputText": batch,
-            "embedder": "multi-qa-MiniLM·l6-cos-vl"
-        }
-        try:
-            response = await client.post(
-                url, 
-                json=payload, 
-                headers={"Authorization": f"Bearer {token}", "Accept": "Application/json"},
-                timeout=60.0
-            )
-            return response.json() if response.status_code == 200 else {"error": response.text}
-        except Exception as e:
-            return {"error": str(e)}
+### TAXONOMY GUIDELINES
+1. EXCLUSIVITY: Each Level 2 topic must belong to only one Level 1 category.
+2. ACTION-ORIENTED: Level 1 names should reflect the "Why" of the call (e.g., "Account & Payment Management" vs. "Tax Law Inquiry").
+3. LOGICAL GROUPING:
+   - Group ID theft and verification under "Identity Protection & Verification."
+   - Group payment plans, liens, and levies under "Collections & Compliance."
+   - Group 1040, 1040-X, and filing status under "Filing & Submission."
+4. GRANULARITY BALANCE: Do not create a "Miscellaneous" category. If a topic is truly unique, create a specific high-level category or fold it into the nearest logical workflow.
 
-async def embed_all_texts(texts, batch_size=100, max_concurrency=10):
-    """Splits texts into batches and processes them concurrently."""
-    api_url = "YOUR_API_URL_HERE" # Replace with your get_api_service_url()
-    
-    # Create batches
-    batches = [texts[i : i + batch_size] for i in range(0, len(texts), batch_size)]
-    semaphore = asyncio.Semaphore(max_concurrency)
-    
-    async with httpx.AsyncClient(verify=cert_verify) as client:
-        tasks = [
-            process_batch(client, semaphore, b, api_url, oauth2_token) 
-            for b in batches
-        ]
-        
-        # tqdm.gather handles the progress bar for async tasks
-        results = await tqdm.gather(*tasks, desc="Processing Embeddings")
-        return results
+### OUTPUT FORMAT
+Return a valid JSON object only. The keys should be the Level 1 Category names, and the values should be an array of the Level 2 Topic strings that belong to them.
 
-# Execution
-if __name__ == "__main__":
-    # Example: 100k strings
-    large_list_of_texts = ["sample text"] * 100000 
-    results = asyncio.run(embed_all_texts(large_list_of_texts))
+Example:
+{
+  "Identity Protection & Verification": ["IP PIN Request", "Identity Theft Affidavit", "TPP Letter Response"],
+  "Refund Assistance": ["Refund Status Inquiry", "Missing Refund Investigation"]
+}
