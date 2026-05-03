@@ -1,22 +1,61 @@
+import pandas as pd
 import re
+from tqdm import tqdm
 
-def parse_topics_fixed(text):
+def normalize_text(text):
+    if not isinstance(text, str): return ""
+    # Standardize whitespace and normalize all dash variants to '-'
+    text = " ".join(text.split())
+    text = re.sub(r'[—–−]', '-', text)
+    return text.strip()
+
+def parse_topics_logic(text):
     if not text: return []
+    # Pattern accounts for Start of String, Space, or Semicolon boundaries
+    pattern = r'(?:^|[\s;])[1-3]\s*-\s*'
+    parts = re.split(pattern, text)
+    return [p.strip().rstrip('.; ') for p in parts if p.strip()]
 
-    # 1. Normalize whitespace (kills the \u202f narrow space)
-    # This turns every weird space into a standard ' '
-    clean_text = " ".join(text.split())
+def parse_full_summary(raw_text):
+    clean_text = normalize_text(raw_text)
+    
+    headers = ['Intent', 'Topics', 'Transfer', 'Next Steps', 'Sentiment', 'Documents']
+    parsed_data = {h: None for h in headers}
+    errors = []
+    
+    # 1. Section Extraction
+    positions = []
+    for h in headers:
+        match = re.search(rf'\[{h}\]', clean_text, re.IGNORECASE)
+        if match:
+            positions.append((match.start(), match.end(), h))
+        else:
+            errors.append(h)
+    positions.sort()
+    
+    for i in range(len(positions)):
+        _, content_start, header_name = positions[i]
+        end_pos = positions[i+1][0] if i+1 < len(positions) else len(clean_text)
+        parsed_data[header_name] = clean_text[content_start:end_pos].strip()
 
-    # 2. The Pattern:
-    # (?:^|[\s;]+) -> Match either the start of the string (^) OR any combination of space/semicolon
-    # [1-3]        -> Match only the digits 1, 2, or 3
-    # \s*-\s* -> Match the dash with any surrounding whitespace
-    pattern = r'(?:^|[\s;]+)[1-3]\s*-\s*'
+    # 2. Topic Parsing
+    raw_topics = parse_topics_logic(parsed_data.get('Topics', ''))
+    parsed_data['Topic_1'] = raw_topics[0] if len(raw_topics) > 0 else None
+    parsed_data['Topic_2'] = raw_topics[1] if len(raw_topics) > 1 else None
+    parsed_data['Topic_3'] = raw_topics[2] if len(raw_topics) > 2 else None
 
-    # 3. Split the text
-    # This will return a list where the first item is empty (since the string starts with '1 -')
-    parts = re.split(pattern, clean_text)
+    # 3. Indicators & Error Logging
+    parsed_data['is_multi_topic'] = 1 if len(raw_topics) > 1 else 0
+    parsed_data['error_count'] = len(errors)
+    parsed_data['missing_headers'] = ", ".join(errors) if errors else None
+    
+    return parsed_data
 
-    # 4. Clean up results
-    # Remove empty strings and strip trailing punctuation/semicolons
-    return [p.strip().rstrip('.;') for p in parts if p.strip()]
+# --- OPTIMIZED EXECUTION ---
+# Instead of .apply(pd.Series), we use a list comprehension with tqdm
+print("Parsing summaries...")
+results_list = [parse_full_summary(row) for row in tqdm(df['summary'])]
+
+# Construct the final DataFrame in one pass (this is the fast part)
+print("Constructing DataFrame...")
+df_results = pd.DataFrame(results_list)
