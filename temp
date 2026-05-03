@@ -1,0 +1,22 @@
+import re
+
+def parse_topics_fixed(text):
+    if not text: return []
+
+    # 1. Normalize whitespace (kills the \u202f narrow space)
+    # This turns every weird space into a standard ' '
+    clean_text = " ".join(text.split())
+
+    # 2. The Pattern:
+    # (?:^|[\s;]+) -> Match either the start of the string (^) OR any combination of space/semicolon
+    # [1-3]        -> Match only the digits 1, 2, or 3
+    # \s*-\s* -> Match the dash with any surrounding whitespace
+    pattern = r'(?:^|[\s;]+)[1-3]\s*-\s*'
+
+    # 3. Split the text
+    # This will return a list where the first item is empty (since the string starts with '1 -')
+    parts = re.split(pattern, clean_text)
+
+    # 4. Clean up results
+    # Remove empty strings and strip trailing punctuation/semicolons
+    return [p.strip().rstrip('.;') for p in parts if p.strip()]
