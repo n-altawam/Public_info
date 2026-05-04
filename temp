@@ -1,61 +1,50 @@
-import pandas as pd
-import re
-from tqdm import tqdm
+import asyncio
+import aiohttp
+from tqdm.asyncio import tqdm
+from certara_secret import oauth2_token, envUrl, cert_verify
 
-def normalize_text(text):
-    if not isinstance(text, str): return ""
-    # Standardize whitespace and normalize all dash variants to '-'
-    text = " ".join(text.split())
-    text = re.sub(r'[—–−]', '-', text)
-    return text.strip()
+# Constants
+API_URL = envUrl + "/layar/gpt/retreival/generateVectors"
+BATCH_SIZE = 50  # Adjust based on API limits
+CONCURRENT_REQUESTS = 10 # Limits how many batches run at once
 
-def parse_topics_logic(text):
-    if not text: return []
-    # Pattern accounts for Start of String, Space, or Semicolon boundaries
-    pattern = r'(?:^|[\s;])[1-3]\s*-\s*'
-    parts = re.split(pattern, text)
-    return [p.strip().rstrip('.; ') for p in parts if p.strip()]
-
-def parse_full_summary(raw_text):
-    clean_text = normalize_text(raw_text)
+async def fetch_embeddings(session, semaphore, batch_texts):
+    """Sends a single batch of texts to the API."""
+    headers = {"Authorization": f"Bearer {oauth2_token}", "Accept": "Application/json"}
+    payload = {"inputText": batch_texts, "embedder": "multi-qa-MiniLM-L6-cos-vl"}
     
-    headers = ['Intent', 'Topics', 'Transfer', 'Next Steps', 'Sentiment', 'Documents']
-    parsed_data = {h: None for h in headers}
-    errors = []
+    async with semaphore:
+        try:
+            async with session.post(API_URL, json=payload, headers=headers, ssl=cert_verify) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    # Extract text and embeddings
+                    return [(item['text'], item['embeddings']) for item in result['data']]
+                else:
+                    return None
+        except Exception as e:
+            return None
+
+async def run_pipeline(text_list):
+    """Manages batches, concurrency, and progress bar."""
+    semaphore = asyncio.Semaphore(CONCURRENT_REQUESTS)
+    batches = [text_list[i:i + BATCH_SIZE] for i in range(0, len(text_list), BATCH_SIZE)]
     
-    # 1. Section Extraction
-    positions = []
-    for h in headers:
-        match = re.search(rf'\[{h}\]', clean_text, re.IGNORECASE)
-        if match:
-            positions.append((match.start(), match.end(), h))
-        else:
-            errors.append(h)
-    positions.sort()
-    
-    for i in range(len(positions)):
-        _, content_start, header_name = positions[i]
-        end_pos = positions[i+1][0] if i+1 < len(positions) else len(clean_text)
-        parsed_data[header_name] = clean_text[content_start:end_pos].strip()
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_embeddings(session, semaphore, b) for b in batches]
+        
+        # tqdm.gather provides the progress bar
+        results = await tqdm.gather(*tasks, desc="Embedding Progress")
+        
+    # Flatten results and filter out errors
+    flattened = [item for sublist in results if sublist for item in sublist]
+    return flattened
 
-    # 2. Topic Parsing
-    raw_topics = parse_topics_logic(parsed_data.get('Topics', ''))
-    parsed_data['Topic_1'] = raw_topics[0] if len(raw_topics) > 0 else None
-    parsed_data['Topic_2'] = raw_topics[1] if len(raw_topics) > 1 else None
-    parsed_data['Topic_3'] = raw_topics[2] if len(raw_topics) > 2 else None
+# --- Execution in Jupyter ---
+# Note: In JN, you can often just use: 
+# results = await run_pipeline(df_unique['text'].tolist())
 
-    # 3. Indicators & Error Logging
-    parsed_data['is_multi_topic'] = 1 if len(raw_topics) > 1 else 0
-    parsed_data['error_count'] = len(errors)
-    parsed_data['missing_headers'] = ", ".join(errors) if errors else None
-    
-    return parsed_data
-
-# --- OPTIMIZED EXECUTION ---
-# Instead of .apply(pd.Series), we use a list comprehension with tqdm
-print("Parsing summaries...")
-results_list = [parse_full_summary(row) for row in tqdm(df['summary'])]
-
-# Construct the final DataFrame in one pass (this is the fast part)
-print("Constructing DataFrame...")
-df_results = pd.DataFrame(results_list)
+# If that fails, use:
+import nest_asyncio
+nest_asyncio.apply()
+results = asyncio.run(run_pipeline(df_unique['text'].tolist()))
