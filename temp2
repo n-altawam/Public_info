@@ -1,0 +1,79 @@
+import os
+import asyncio
+import aiohttp
+import ssl
+import nest_asyncio
+import pandas as pd
+from tqdm.notebook import tqdm
+from certara_secret import oauth2_token, envUrl
+
+nest_asyncio.apply()
+
+# Use your verified SSL fix
+ssl_context = ssl.create_default_context(cafile=os.environ.get("SSL_CERT_FILE"))
+
+async def fetch_embeddings(session, semaphore, batch_texts, batch_idx):
+    headers = {
+        "Authorization": f"Bearer {oauth2_token}", 
+        "Accept": "Application/json"
+    }
+    payload = {
+        "inputText": batch_texts, 
+        "embedder": "multi-qa-MiniLM-L6-cos-vl"
+    }
+    
+    async with semaphore:
+        try:
+            async with session.post(envUrl + "/layar/gpt/retreival/generateVectors", 
+                                   json=payload, headers=headers, ssl=ssl_context) as resp:
+                
+                if resp.status == 200:
+                    result = await resp.json()
+                    # CRITICAL: Check if 'data' exists in the response
+                    if 'data' in result:
+                        return [(item['text'], item['embeddings']) for item in result['data']]
+                    else:
+                        print(f"Batch {batch_idx}: Success (200) but 'data' key missing! Keys: {result.keys()}")
+                        return None
+                else:
+                    # Capture the error message from the API
+                    err_msg = await resp.text()
+                    print(f"Batch {batch_idx}: API Error {resp.status} - {err_msg[:200]}")
+                    return None
+        except Exception as e:
+            print(f"Batch {batch_idx}: Connection Error - {str(e)}")
+            return None
+
+async def run_pipeline(text_list):
+    # Setup
+    BATCH_SIZE = 50 
+    CONCURRENT_REQUESTS = 5 # Lowered to see logs clearly
+    semaphore = asyncio.Semaphore(CONCURRENT_REQUESTS)
+    batches = [text_list[i:i + BATCH_SIZE] for i in range(0, len(text_list), BATCH_SIZE)]
+    
+    print(f"Total Batches to process: {len(batches)}")
+
+    async with aiohttp.ClientSession() as session:
+        # We wrap the tasks to include an index for better debugging
+        tasks = [fetch_embeddings(session, semaphore, b, i) for i, b in enumerate(batches)]
+        
+        # Use return_exceptions=True to ensure we see them
+        results = await tqdm.gather(*tasks, desc="Processing")
+        
+    # Check if we got any data at all before flattening
+    valid_results = [r for r in results if r is not None]
+    print(f"Batches successful: {len(valid_results)} out of {len(results)}")
+    
+    # Flatten
+    flattened = [item for sublist in valid_results for item in sublist]
+    return flattened
+
+# --- TEST RUN ---
+# Try it with just 200 rows first to verify it works
+test_input = df_unique['text'].head(200).astype(str).tolist()
+results = asyncio.run(run_pipeline(test_input))
+
+if results:
+    print(f"Success! Sample: {results[0][0][:50]}...")
+else:
+    print("Failed to retrieve any embeddings.")
