@@ -1,0 +1,73 @@
+import os
+import ssl
+import asyncio
+import aiohttp
+import pandas as pd
+from tqdm.asyncio import tqdm
+from certara_secret import oauth2_token, envUrl, cert_verify
+
+# Env vars
+os.environ["SSL_CERT_FILE"] = cert_verify
+os.environ["REQUEST_CA_BUNDLE"] = cert_verify
+
+def get_api_service_url():
+    return envUrl + "/layar/gpt/retreival/generateVectors"
+
+def auth_token():
+    return oauth2_token
+
+# 1. Preprocessing Function
+def preprocess_data(df, text_col='text'):
+    df_clean = df.groupby(text_col).size().reset_index(name='duplicate_count')
+    unique_texts = df_clean[text_col].tolist()
+    return df_clean, unique_texts
+
+# 2. Async API Call for a Single Batch (Updated for aiohttp)
+async def fetch_batch(batch, session, api_service_url, api_key, sem):
+    async with sem:
+        cmd = {
+            "inputText": batch,
+            "embedder": "multi-qa-MiniLM-L6-cos-vl"
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}", 
+            "Accept": "application/json"
+        }
+        
+        try:
+            # aiohttp uses session.post
+            async with session.post(api_service_url, json=cmd, headers=headers) as response:
+                response.raise_for_status() 
+                
+                response_json = await response.json()
+                data = response_json.get('data', [])
+                
+                return [{"text": item['text'], "embeddings": item['embeddings']} for item in data]
+                
+        except Exception as e:
+            print(f"Error on batch: {e}")
+            return []
+
+# 3. Main Async Pipeline (Updated with TCPConnector & SSL)
+async def run_embedding_pipeline(texts, batch_size=100, max_concurrent=10):
+    api_service_url = get_api_service_url()
+    api_key = auth_token()
+    
+    batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
+    sem = asyncio.Semaphore(max_concurrent)
+    
+    # Create the SSL context and TCPConnector
+    ssl_context = ssl.create_default_context(cafile=os.environ.get("SSL_CERT_FILE"))
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
+    
+    # Pass the connector into the aiohttp ClientSession
+    async with aiohttp.ClientSession(connector=connector) as session:
+        tasks = [
+            fetch_batch(batch, session, api_service_url, api_key, sem) 
+            for batch in batches
+        ]
+        
+        results = await tqdm.gather(*tasks, desc="Fetching Embeddings")
+        
+    flattened_results = [item for sublist in results for item in sublist]
+    return flattened_results
