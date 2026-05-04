@@ -1,79 +1,102 @@
 import os
 import asyncio
-import aiohttp
-import ssl
-import nest_asyncio
+import httpx
 import pandas as pd
-from tqdm.notebook import tqdm
-from certara_secret import oauth2_token, envUrl
+from tqdm.asyncio import tqdm
+from certara_secret import oauth2_token, envUrl, cert_verify
 
-nest_asyncio.apply()
+# Env vars
+os.environ["SSL_CERT_FILE"] = cert_verify
+os.environ["REQUEST_CA_BUNDLE"] = cert_verify
 
-# Use your verified SSL fix
-ssl_context = ssl.create_default_context(cafile=os.environ.get("SSL_CERT_FILE"))
+def get_api_service_url():
+    return envUrl + "/layar/gpt/retreival/generateVectors"
 
-async def fetch_embeddings(session, semaphore, batch_texts, batch_idx):
-    headers = {
-        "Authorization": f"Bearer {oauth2_token}", 
-        "Accept": "Application/json"
-    }
-    payload = {
-        "inputText": batch_texts, 
-        "embedder": "multi-qa-MiniLM-L6-cos-vl"
-    }
-    
-    async with semaphore:
+def auth_token():
+    return oauth2_token
+
+# 1. Preprocessing Function
+def preprocess_data(df, text_col='text'):
+    """Drops duplicates, keeps counts, and returns unique texts."""
+    df_clean = df.groupby(text_col).size().reset_index(name='duplicate_count')
+    unique_texts = df_clean[text_col].tolist()
+    return df_clean, unique_texts
+
+# 2. Async API Call for a Single Batch
+async def fetch_batch(batch, client, api_service_url, api_key, sem):
+    """Fetches embeddings for a single batch of texts, limited by a semaphore."""
+    async with sem:  # Limits concurrent requests to avoid overloading the API
+        cmd = {
+            "inputText": batch,
+            "embedder": "multi-qa-MiniLM-L6-cos-vl"
+        }
         try:
-            async with session.post(envUrl + "/layar/gpt/retreival/generateVectors", 
-                                   json=payload, headers=headers, ssl=ssl_context) as resp:
-                
-                if resp.status == 200:
-                    result = await resp.json()
-                    # CRITICAL: Check if 'data' exists in the response
-                    if 'data' in result:
-                        return [(item['text'], item['embeddings']) for item in result['data']]
-                    else:
-                        print(f"Batch {batch_idx}: Success (200) but 'data' key missing! Keys: {result.keys()}")
-                        return None
-                else:
-                    # Capture the error message from the API
-                    err_msg = await resp.text()
-                    print(f"Batch {batch_idx}: API Error {resp.status} - {err_msg[:200]}")
-                    return None
+            response = await client.post(
+                api_service_url, 
+                json=cmd,
+                headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+            )
+            response.raise_for_status() # Automatically raise exception for 4xx/5xx errors
+            
+            data = response.json().get('data', [])
+            # Extract text and embeddings to match them up cleanly
+            return [{"text": item['text'], "embeddings": item['embeddings']} for item in data]
+            
         except Exception as e:
-            print(f"Batch {batch_idx}: Connection Error - {str(e)}")
-            return None
+            print(f"Error on batch: {e}")
+            return [] # Return empty list on failure so the pipeline doesn't crash entirely
 
-async def run_pipeline(text_list):
-    # Setup
-    BATCH_SIZE = 50 
-    CONCURRENT_REQUESTS = 5 # Lowered to see logs clearly
-    semaphore = asyncio.Semaphore(CONCURRENT_REQUESTS)
-    batches = [text_list[i:i + BATCH_SIZE] for i in range(0, len(text_list), BATCH_SIZE)]
+# 3. Main Async Pipeline
+async def run_embedding_pipeline(texts, batch_size=100, max_concurrent=10):
+    api_service_url = get_api_service_url()
+    api_key = auth_token()
     
-    print(f"Total Batches to process: {len(batches)}")
-
-    async with aiohttp.ClientSession() as session:
-        # We wrap the tasks to include an index for better debugging
-        tasks = [fetch_embeddings(session, semaphore, b, i) for i, b in enumerate(batches)]
-        
-        # Use return_exceptions=True to ensure we see them
-        results = await tqdm.gather(*tasks, desc="Processing")
-        
-    # Check if we got any data at all before flattening
-    valid_results = [r for r in results if r is not None]
-    print(f"Batches successful: {len(valid_results)} out of {len(results)}")
+    # Chunk the ~200k strings into manageable batches
+    batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
     
-    # Flatten
-    flattened = [item for sublist in valid_results for item in sublist]
-    return flattened
+    # Semaphore to limit how many API calls happen at the exact same time
+    sem = asyncio.Semaphore(max_concurrent)
+    
+    # Httpx AsyncClient replaces requests
+    async with httpx.AsyncClient(verify=cert_verify, timeout=60.0) as client:
+        tasks = [
+            fetch_batch(batch, client, api_service_url, api_key, sem) 
+            for batch in batches
+        ]
+        
+        # tqdm wrapper for asyncio to show progress bar
+        results = await tqdm.gather(*tasks, desc="Fetching Embeddings")
+        
+    # Flatten the list of lists into a single list of dictionaries
+    flattened_results = [item for sublist in results for item in sublist]
+    return flattened_results
 
-# --- TEST RUN ---
-# Try it with just 200 rows first to verify it works
-test_input = df_unique['text'].head(200).astype(str).tolist()
-results = asyncio.run(run_pipeline(test_input))
 
-if results:
-    print(f"Success! Sample: {results[0][0][:50]}...")
-else:
-    print("Failed to retrieve any embeddings.")
+
+
+
+
+############################
+# Assuming you have an initial dataframe `df_input` loaded
+print(f"Original length: {len(df_input)}")
+
+# Step 1: Preprocess
+df_clean, unique_texts = preprocess_data(df_input, text_col='text')
+print(f"Unique strings to embed: {len(unique_texts)}")
+
+# Step 2: Run pipeline
+# Adjust batch_size based on what the API allows. 
+# Adjust max_concurrent based on API rate limits.
+results = await run_embedding_pipeline(unique_texts, batch_size=100, max_concurrent=10)
+
+# Step 3: Convert to final DataFrame and Merge
+df_embeddings = pd.DataFrame(results)
+
+# Merge the embeddings back with your cleaned data (which contains the duplicate counts)
+df_final = pd.merge(df_clean, df_embeddings, on='text', how='inner')
+
+# Step 4: Save as Parquet for easy loading later
+df_final.to_parquet('embedded_data.parquet')
+
+# To load it back tomorrow:
+# df_loaded = pd.read_parquet('embedded_data.parquet')
