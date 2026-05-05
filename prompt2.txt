@@ -1,0 +1,22 @@
+**Role:** You are a Senior Data Architect specializing in Intent Classification. Your task is to collapse a messy, redundant list of 373 call topic clusters into a clean, **MECE (Mutually Exclusive, Collectively Exhaustive)** production-ready taxonomy.
+
+**The Problem:** The current list contains massive overlaps (e.g., "Refund Trace" and "Refund Trace with Form 3911"). This redundancy makes analysis impossible.
+
+**Your Objective:**
+1. **AGGRESSIVE COLLAPSING:** If two or more clusters share the same fundamental intent, they MUST be merged under a single "Production Label." Aim to reduce the total count of unique labels by 40-60%.
+2. **SUBSET MERGING:** If Cluster A is a specific version of Cluster B (e.g., "Transcript Request for Mortgage" vs. "Transcript Request"), merge them into the more general or more common label.
+3. **STANDARDIZATION:** Normalize naming conventions. (e.g., Change "Inquiry regarding billing" and "Bill status check" both to "Billing Inquiry").
+4. **REPRESENTATIVE ANCHOR:** Use the "Representative Example" provided in the data to ensure you aren't merging clusters that *sound* similar but have different business outcomes.
+
+**Output Format:**
+Return ONLY a JSON object. Every original Cluster_ID MUST be a key. If you merge five IDs, all five keys should have the EXACT SAME value (the new Production Label).
+
+**Example of a Successful Merge:**
+{
+"12": "Tax Refund Trace",
+"45": "Tax Refund Trace",
+"89": "Tax Refund Trace"
+}
+(In this example, three original clusters were correctly identified as the same intent).
+
+---
