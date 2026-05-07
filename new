@@ -1,73 +1,32 @@
-import os
-import ssl
-import asyncio
-import aiohttp
-import pandas as pd
-from tqdm.asyncio import tqdm
-from certara_secret import oauth2_token, envUrl, cert_verify
+# ── Coverage stats ────────────────────────────────────────────────────────────
+total        = len(df)
+unclassified = (df['assigned_label'] == 'Unclassified').sum()
+classified   = total - unclassified
 
-# Env vars
-os.environ["SSL_CERT_FILE"] = cert_verify
-os.environ["REQUEST_CA_BUNDLE"] = cert_verify
+print(f"Total strings    : {total:,}")
+print(f"Classified       : {classified:,}  ({classified/total*100:.1f}%)")
+print(f"Unclassified     : {unclassified:,}  ({unclassified/total*100:.1f}%)")
 
-def get_api_service_url():
-    return envUrl + "/layar/gpt/retreival/generateVectors"
+# ── Agreement with original HDBSCAN label ─────────────────────────────────────
+# For non-noise points, check if assigned label matches the original cluster label
+non_noise = df[df['cluster_id'] != -1].copy()
+non_noise['match'] = non_noise['assigned_label'] == non_noise['cluster_label']
+agreement = non_noise['match'].mean()
+print(f"\nLabel agreement (non-noise): {agreement*100:.1f}%")
 
-def auth_token():
-    return oauth2_token
+# ── What happened to the original noise points? ───────────────────────────────
+noise = df[df['cluster_id'] == -1]
+noise_classified = (noise['assigned_label'] != 'Unclassified').sum()
+print(f"\nNoise points now classified : {noise_classified:,} / {len(noise):,}")
+print(f"Noise points still unclassified: {len(noise) - noise_classified:,}")
 
-# 1. Preprocessing Function
-def preprocess_data(df, text_col='text'):
-    df_clean = df.groupby(text_col).size().reset_index(name='duplicate_count')
-    unique_texts = df_clean[text_col].tolist()
-    return df_clean, unique_texts
+# ── Distribution of assigned labels ──────────────────────────────────────────
+print("\nTop 15 assigned labels:")
+print(df['assigned_label'].value_counts().head(15))
 
-# 2. Async API Call for a Single Batch (Updated for aiohttp)
-async def fetch_batch(batch, session, api_service_url, api_key, sem):
-    async with sem:
-        cmd = {
-            "inputText": batch,
-            "embedder": "multi-qa-MiniLM-L6-cos-vl"
-        }
-        headers = {
-            "Authorization": f"Bearer {api_key}", 
-            "Accept": "application/json"
-        }
-        
-        try:
-            # aiohttp uses session.post
-            async with session.post(api_service_url, json=cmd, headers=headers) as response:
-                response.raise_for_status() 
-                
-                response_json = await response.json()
-                data = response_json.get('data', [])
-                
-                return [{"text": item['text'], "embeddings": item['embeddings']} for item in data]
-                
-        except Exception as e:
-            print(f"Error on batch: {e}")
-            return []
-
-# 3. Main Async Pipeline (Updated with TCPConnector & SSL)
-async def run_embedding_pipeline(texts, batch_size=100, max_concurrent=10):
-    api_service_url = get_api_service_url()
-    api_key = auth_token()
-    
-    batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
-    sem = asyncio.Semaphore(max_concurrent)
-    
-    # Create the SSL context and TCPConnector
-    ssl_context = ssl.create_default_context(cafile=os.environ.get("SSL_CERT_FILE"))
-    connector = aiohttp.TCPConnector(ssl=ssl_context)
-    
-    # Pass the connector into the aiohttp ClientSession
-    async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = [
-            fetch_batch(batch, session, api_service_url, api_key, sem) 
-            for batch in batches
-        ]
-        
-        results = await tqdm.gather(*tasks, desc="Fetching Embeddings")
-        
-    flattened_results = [item for sublist in results for item in sublist]
-    return flattened_results
+# ── Review unclassified strings ───────────────────────────────────────────────
+print("\nSample unclassified strings with their nearest (rejected) label:")
+review = df[df['assigned_label'] == 'Unclassified'][
+    ['topic_string', 'similarity_score', 'fallback_label']
+].sample(20, random_state=42)
+print(review.to_string(index=False))
