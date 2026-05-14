@@ -1,27 +1,46 @@
-def review_cluster(label, cluster_df_clean, results_127, n=15):
-    print(f"\n{'='*60}")
-    print(f"Cluster: {label}")
-    
-    # Confidence distribution
-    cluster_results = results_127[results_127['assigned_label'] == label]
-    print(f"Count: {len(cluster_results)}")
-    print(f"Confidence distribution:")
-    print(f"  Above 0.80: {(cluster_results['confidence'] > 0.80).mean():.1%}")
-    print(f"  0.60-0.80:  {((cluster_results['confidence'] >= 0.60) & (cluster_results['confidence'] <= 0.80)).mean():.1%}")
-    print(f"  Below 0.60: {(cluster_results['confidence'] < 0.60).mean():.1%}")
-    
-    # High confidence strings - what belongs here
-    print(f"\nHigh confidence strings (top 10):")
-    top = cluster_results.nlargest(10, 'confidence')[['topic', 'confidence']]
-    for _, row in top.iterrows():
-        print(f"  {row['confidence']:.3f} — {row['topic']}")
-    
-    # Low confidence strings - what doesnt belong
-    print(f"\nLow confidence strings (bottom 10):")
-    bottom = cluster_results.nsmallest(10, 'confidence')[['topic', 'confidence']]
-    for _, row in bottom.iterrows():
-        print(f"  {row['confidence']:.3f} — {row['topic']}")
+Here are both code blocks — run them together:
 
-# Start with weakest cluster
-review_cluster('Enrollment Application Status Processing', 
-               cluster_df_clean, results_127)
+**Assignment sanity check:**
+```python
+# Global borderline strings - just above threshold
+sanity_check = results_127[
+    (results_127['diagnosis'] == 'classified') & 
+    (results_127['confidence'] < 0.55)
+].sort_values('confidence', ascending=True)
+
+print(f"Strings classified but below 0.55 confidence: {len(sanity_check):,}")
+print(f"That's {len(sanity_check)/len(results_127):.1%} of all strings\n")
+
+print("Bottom 20 classified strings globally:")
+print(sanity_check[['topic', 'assigned_label', 'confidence', 
+                      'second_best_label', 'second_best_sim']]
+      .head(20).to_string(index=False))
+```
+
+**Size distribution:**
+```python
+# Cluster size distribution
+size_dist = (results_127[results_127['assigned_label'] != 'unclassified']
+             .groupby('assigned_label')
+             .size()
+             .reset_index(name='count')
+             .sort_values('count', ascending=False))
+
+print(f"Cluster size distribution:")
+print(f"  Largest cluster:  {size_dist['count'].max():,} strings")
+print(f"  Smallest cluster: {size_dist['count'].min():,} strings")
+print(f"  Median size:      {size_dist['count'].median():.0f} strings")
+print(f"  Mean size:        {size_dist['count'].mean():.0f} strings")
+print(f"\nClusters with fewer than 100 members: "
+      f"{(size_dist['count'] < 100).sum()}")
+print(f"Clusters with more than 5000 members: "
+      f"{(size_dist['count'] > 5000).sum()}")
+
+print(f"\nTop 10 largest clusters:")
+print(size_dist.head(10).to_string(index=False))
+
+print(f"\nBottom 10 smallest clusters:")
+print(size_dist.tail(10).to_string(index=False))
+```
+
+Share both outputs and we'll do a final assessment.
