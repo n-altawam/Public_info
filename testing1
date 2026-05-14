@@ -1,0 +1,36 @@
+# Intra-cluster coherence analysis
+coherence = results_127.copy()
+
+# Only look at classified strings
+classified = coherence[coherence['diagnosis'] == 'classified']
+
+# Compute per-cluster confidence statistics
+cluster_coherence = (
+    classified.groupby('assigned_label')['confidence']
+    .agg(
+        count='count',
+        mean_confidence='mean',
+        median_confidence='median',
+        std_confidence='std',
+        pct_below_60=lambda x: (x < 0.60).mean(),
+        pct_above_80=lambda x: (x > 0.80).mean(),
+        min_confidence='min'
+    )
+    .round(3)
+    .sort_values('mean_confidence', ascending=True)
+    .reset_index()
+)
+
+print(f"Overall cluster coherence summary:")
+print(f"Clusters with mean confidence below 0.60: "
+      f"{(cluster_coherence['mean_confidence'] < 0.60).sum()}")
+print(f"Clusters with mean confidence above 0.80: "
+      f"{(cluster_coherence['mean_confidence'] > 0.80).sum()}")
+print(f"Clusters with >20% members below 0.60: "
+      f"{(cluster_coherence['pct_below_60'] > 0.20).sum()}")
+
+print(f"\nBottom 15 clusters by mean confidence (weakest):")
+print(cluster_coherence.head(15).to_string(index=False))
+
+print(f"\nTop 15 clusters by mean confidence (strongest):")
+print(cluster_coherence.tail(15).to_string(index=False))
