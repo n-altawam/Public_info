@@ -1,36 +1,27 @@
-# Intra-cluster coherence analysis
-coherence = results_127.copy()
+def review_cluster(label, cluster_df_clean, results_127, n=15):
+    print(f"\n{'='*60}")
+    print(f"Cluster: {label}")
+    
+    # Confidence distribution
+    cluster_results = results_127[results_127['assigned_label'] == label]
+    print(f"Count: {len(cluster_results)}")
+    print(f"Confidence distribution:")
+    print(f"  Above 0.80: {(cluster_results['confidence'] > 0.80).mean():.1%}")
+    print(f"  0.60-0.80:  {((cluster_results['confidence'] >= 0.60) & (cluster_results['confidence'] <= 0.80)).mean():.1%}")
+    print(f"  Below 0.60: {(cluster_results['confidence'] < 0.60).mean():.1%}")
+    
+    # High confidence strings - what belongs here
+    print(f"\nHigh confidence strings (top 10):")
+    top = cluster_results.nlargest(10, 'confidence')[['topic', 'confidence']]
+    for _, row in top.iterrows():
+        print(f"  {row['confidence']:.3f} — {row['topic']}")
+    
+    # Low confidence strings - what doesnt belong
+    print(f"\nLow confidence strings (bottom 10):")
+    bottom = cluster_results.nsmallest(10, 'confidence')[['topic', 'confidence']]
+    for _, row in bottom.iterrows():
+        print(f"  {row['confidence']:.3f} — {row['topic']}")
 
-# Only look at classified strings
-classified = coherence[coherence['diagnosis'] == 'classified']
-
-# Compute per-cluster confidence statistics
-cluster_coherence = (
-    classified.groupby('assigned_label')['confidence']
-    .agg(
-        count='count',
-        mean_confidence='mean',
-        median_confidence='median',
-        std_confidence='std',
-        pct_below_60=lambda x: (x < 0.60).mean(),
-        pct_above_80=lambda x: (x > 0.80).mean(),
-        min_confidence='min'
-    )
-    .round(3)
-    .sort_values('mean_confidence', ascending=True)
-    .reset_index()
-)
-
-print(f"Overall cluster coherence summary:")
-print(f"Clusters with mean confidence below 0.60: "
-      f"{(cluster_coherence['mean_confidence'] < 0.60).sum()}")
-print(f"Clusters with mean confidence above 0.80: "
-      f"{(cluster_coherence['mean_confidence'] > 0.80).sum()}")
-print(f"Clusters with >20% members below 0.60: "
-      f"{(cluster_coherence['pct_below_60'] > 0.20).sum()}")
-
-print(f"\nBottom 15 clusters by mean confidence (weakest):")
-print(cluster_coherence.head(15).to_string(index=False))
-
-print(f"\nTop 15 clusters by mean confidence (strongest):")
-print(cluster_coherence.tail(15).to_string(index=False))
+# Start with weakest cluster
+review_cluster('Enrollment Application Status Processing', 
+               cluster_df_clean, results_127)
