@@ -1,46 +1,48 @@
-Here are both code blocks — run them together:
+import pandas as pd
+import numpy as np
+import pickle
 
-**Assignment sanity check:**
-```python
-# Global borderline strings - just above threshold
-sanity_check = results_127[
-    (results_127['diagnosis'] == 'classified') & 
-    (results_127['confidence'] < 0.55)
-].sort_values('confidence', ascending=True)
+# Build the final taxonomy artifact
+# One row per cluster — label, centroid, size, mean confidence
+cluster_summary = (
+    results_127[results_127['assigned_label'] != 'unclassified']
+    .groupby('assigned_label')
+    .agg(
+        member_count=('topic', 'count'),
+        mean_confidence=('confidence', 'mean'),
+        median_confidence=('confidence', 'median'),
+    )
+    .round(3)
+    .reset_index()
+)
 
-print(f"Strings classified but below 0.55 confidence: {len(sanity_check):,}")
-print(f"That's {len(sanity_check)/len(results_127):.1%} of all strings\n")
+# Merge in centroids
+taxonomy = cluster_summary.merge(
+    centroids_127[['cluster_label', 'centroid']],
+    left_on='assigned_label',
+    right_on='cluster_label',
+    how='left'
+).drop(columns='cluster_label')
 
-print("Bottom 20 classified strings globally:")
-print(sanity_check[['topic', 'assigned_label', 'confidence', 
-                      'second_best_label', 'second_best_sim']]
-      .head(20).to_string(index=False))
-```
+# Rename for clarity
+taxonomy = taxonomy.rename(columns={'assigned_label': 'cluster_label'})
 
-**Size distribution:**
-```python
-# Cluster size distribution
-size_dist = (results_127[results_127['assigned_label'] != 'unclassified']
-             .groupby('assigned_label')
-             .size()
-             .reset_index(name='count')
-             .sort_values('count', ascending=False))
+# Confirm nothing is missing
+assert taxonomy['centroid'].isna().sum() == 0, "Missing centroids detected"
+assert len(taxonomy) == 127, f"Expected 127 clusters, got {len(taxonomy)}"
 
-print(f"Cluster size distribution:")
-print(f"  Largest cluster:  {size_dist['count'].max():,} strings")
-print(f"  Smallest cluster: {size_dist['count'].min():,} strings")
-print(f"  Median size:      {size_dist['count'].median():.0f} strings")
-print(f"  Mean size:        {size_dist['count'].mean():.0f} strings")
-print(f"\nClusters with fewer than 100 members: "
-      f"{(size_dist['count'] < 100).sum()}")
-print(f"Clusters with more than 5000 members: "
-      f"{(size_dist['count'] > 5000).sum()}")
+print(f"Taxonomy artifact: {len(taxonomy)} clusters")
+print(f"Columns: {taxonomy.columns.tolist()}")
+print(f"\nSample:")
+print(taxonomy[['cluster_label', 'member_count', 
+                 'mean_confidence']].head(10).to_string(index=False))
 
-print(f"\nTop 10 largest clusters:")
-print(size_dist.head(10).to_string(index=False))
+# Save
+taxonomy.to_parquet('final_taxonomy_127.parquet')
 
-print(f"\nBottom 10 smallest clusters:")
-print(size_dist.tail(10).to_string(index=False))
-```
+# Also save centroids separately as a lightweight lookup
+with open('final_centroids_127.pkl', 'wb') as f:
+    pickle.dump(taxonomy[['cluster_label', 'centroid']], f)
 
-Share both outputs and we'll do a final assessment.
+print("\nSaved: final_taxonomy_127.parquet")
+print("Saved: final_centroids_127.pkl")
