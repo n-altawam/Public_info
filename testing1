@@ -1,48 +1,33 @@
-import pandas as pd
+from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
+from scipy.spatial.distance import pdist
+import matplotlib.pyplot as plt
 import numpy as np
-import pickle
 
-# Build the final taxonomy artifact
-# One row per cluster — label, centroid, size, mean confidence
-cluster_summary = (
-    results_127[results_127['assigned_label'] != 'unclassified']
-    .groupby('assigned_label')
-    .agg(
-        member_count=('topic', 'count'),
-        mean_confidence=('confidence', 'mean'),
-        median_confidence=('confidence', 'median'),
-    )
-    .round(3)
-    .reset_index()
+# Extract centroid matrix from final taxonomy
+centroid_matrix = np.stack(taxonomy['centroid'].values)
+labels_127 = taxonomy['cluster_label'].tolist()
+
+# Compute pairwise distances using cosine distance
+# (1 - cosine_similarity, so closer = more similar)
+distances = pdist(centroid_matrix, metric='cosine')
+
+# Agglomerative clustering using Ward linkage
+# Ward minimizes variance within merged clusters — good for balanced groups
+linkage_matrix = linkage(distances, method='ward')
+
+# Plot dendrogram
+plt.figure(figsize=(20, 8))
+dendrogram(
+    linkage_matrix,
+    labels=labels_127,
+    leaf_rotation=90,
+    leaf_font_size=7,
+    color_threshold=0.3
 )
-
-# Merge in centroids
-taxonomy = cluster_summary.merge(
-    centroids_127[['cluster_label', 'centroid']],
-    left_on='assigned_label',
-    right_on='cluster_label',
-    how='left'
-).drop(columns='cluster_label')
-
-# Rename for clarity
-taxonomy = taxonomy.rename(columns={'assigned_label': 'cluster_label'})
-
-# Confirm nothing is missing
-assert taxonomy['centroid'].isna().sum() == 0, "Missing centroids detected"
-assert len(taxonomy) == 127, f"Expected 127 clusters, got {len(taxonomy)}"
-
-print(f"Taxonomy artifact: {len(taxonomy)} clusters")
-print(f"Columns: {taxonomy.columns.tolist()}")
-print(f"\nSample:")
-print(taxonomy[['cluster_label', 'member_count', 
-                 'mean_confidence']].head(10).to_string(index=False))
-
-# Save
-taxonomy.to_parquet('final_taxonomy_127.parquet')
-
-# Also save centroids separately as a lightweight lookup
-with open('final_centroids_127.pkl', 'wb') as f:
-    pickle.dump(taxonomy[['cluster_label', 'centroid']], f)
-
-print("\nSaved: final_taxonomy_127.parquet")
-print("Saved: final_centroids_127.pkl")
+plt.title('L2 Cluster Hierarchy — Dendrogram', fontsize=14)
+plt.xlabel('L2 Cluster Label')
+plt.ylabel('Distance')
+plt.tight_layout()
+plt.savefig('l1_dendrogram.png', dpi=150, bbox_inches='tight')
+plt.show()
+print("Dendrogram saved.")s
