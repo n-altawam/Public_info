@@ -1,33 +1,14 @@
-from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
-from scipy.spatial.distance import pdist
-import matplotlib.pyplot as plt
-import numpy as np
+def show_l1_groups(linkage_matrix, labels_127, threshold):
+    groups = fcluster(linkage_matrix, t=threshold, criterion='distance')
+    n_groups = len(set(groups))
+    print(f"\nThreshold {threshold} → {n_groups} L1 groups")
+    print("=" * 60)
+    
+    for g in sorted(set(groups)):
+        members = [labels_127[i] for i, grp in enumerate(groups) if grp == g]
+        print(f"\nGroup {g} ({len(members)} L2 clusters):")
+        for m in sorted(members):
+            print(f"  - {m}")
 
-# Extract centroid matrix from final taxonomy
-centroid_matrix = np.stack(taxonomy['centroid'].values)
-labels_127 = taxonomy['cluster_label'].tolist()
-
-# Compute pairwise distances using cosine distance
-# (1 - cosine_similarity, so closer = more similar)
-distances = pdist(centroid_matrix, metric='cosine')
-
-# Agglomerative clustering using Ward linkage
-# Ward minimizes variance within merged clusters — good for balanced groups
-linkage_matrix = linkage(distances, method='ward')
-
-# Plot dendrogram
-plt.figure(figsize=(20, 8))
-dendrogram(
-    linkage_matrix,
-    labels=labels_127,
-    leaf_rotation=90,
-    leaf_font_size=7,
-    color_threshold=0.3
-)
-plt.title('L2 Cluster Hierarchy — Dendrogram', fontsize=14)
-plt.xlabel('L2 Cluster Label')
-plt.ylabel('Distance')
-plt.tight_layout()
-plt.savefig('l1_dendrogram.png', dpi=150, bbox_inches='tight')
-plt.show()
-print("Dendrogram saved.")s
+show_l1_groups(linkage_matrix, labels_127, threshold=1.0)
+show_l1_groups(linkage_matrix, labels_127, threshold=0.9)
